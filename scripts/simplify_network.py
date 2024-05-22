@@ -109,6 +109,9 @@ from pypsa.clustering.spatial import (
 )
 from pypsa.io import import_components_from_dataframe, import_series_from_dataframe
 from scipy.sparse.csgraph import connected_components, dijkstra
+from shapely.geometry import LineString
+from shapely.ops import unary_union
+
 
 sys.settrace
 
@@ -490,6 +493,120 @@ def simplify_links(
         exclude_carriers=exclude_carriers,
     )
     return n, busmap
+
+def merge_nearest_network(
+    n,
+    cluster_config,
+    offshore_shapes,
+    p_threshold_drop_isolated,
+    p_threshold_merge_isolated,
+    aggregation_strategies=dict(),
+):
+
+    merged_offshore_shapes = unary_union(gpd.read_file(offshore_shapes)["geometry"])
+
+    tolerance_radius = cluster_config.get("merge_nearest_network_tolerance_radius", 1)
+    across_border = cluster_config.get("merge_nearest_network_across_border", False)
+    across_water = cluster_config.get("merge_nearest_network_across_water", False)
+
+    logger.info(f"connecting stubs and isolated nodes to the nearest bus under a {tolerance_radius} deg radius")
+
+    network_crs = snakemake.params.geo_crs
+
+    n.determine_network_topology()
+
+    n_buses_gdf = transform_to_gdf(n, network_crs=network_crs)
+
+    # find stubs and island nodes
+    G = n.graph()
+
+    stubs = []
+    i_islands = []
+
+    for u in G.nodes:
+        neighbours = list(G.adj[u].keys())
+        if len(neighbours) == 1:
+            stubs = stubs + [u]
+        elif len(neighbours) == 0:
+            i_islands = i_islands + [u]
+
+    # isolated buses with load below than a specified threshold are neglected
+    i_load_islands = n.loads_t.p_set.columns.intersection(i_islands)
+    i_small_load = i_load_islands[
+        n.loads_t.p_set[i_load_islands].mean(axis=0) <= max(p_threshold_drop_isolated,p_threshold_merge_isolated)]
+
+    # create a new network map of potential nodes
+    n_buses_gdf = n_buses_gdf.query("carrier=='AC'")
+    new_network_map = n_buses_gdf.query("index == @stubs or (index == @i_islands and ~index.isin(@i_small_load))").index.to_series()
+
+    for b in new_network_map.index:
+        bus0 = n_buses_gdf.loc[n_buses_gdf.index == f"{b}"]
+        
+        bus1 = n_buses_gdf.loc[(n_buses_gdf.x < bus0.x.item() + tolerance_radius*2) # it must be within the tolerance area
+                            & (n_buses_gdf.x > bus0.x.item() - tolerance_radius*2) # NOTE: the distance is approximate and is only use to speed up the code
+                            & (n_buses_gdf.y < bus0.y.item() + tolerance_radius) 
+                            & (n_buses_gdf.y > bus0.y.item() - tolerance_radius)
+                            & (n_buses_gdf.sub_network != bus0.sub_network.item()) # it must be from a different network
+                            & ~n_buses_gdf.index.isin(i_small_load) # it must not be dropped in later codes
+                            ]
+        
+        if not across_border:
+            bus1 = bus1.loc[bus1.country == bus0.country.item()]
+
+        if not across_water:
+            for i in bus1.index:
+                line = LineString([[bus0.x.item(), bus0.y.item()],[bus1.x[i].item(), bus1.y[i].item()]])
+                if line.intersects(merged_offshore_shapes):
+                    bus1.drop(i) # the line are not allowed to go through the sea
+        
+        new_network = gpd.sjoin_nearest(bus0, bus1, max_distance=tolerance_radius) # analysis is limited by a radius
+        
+        if new_network.empty:
+            continue
+            
+        new_network_map[b] = new_network.bus_id_right.item()
+
+    new_network_map = new_network_map.loc[new_network_map.index != new_network_map] # remove buses with no new lines
+
+    indices_to_remove = set()
+
+    for i in new_network_map.index:
+        for j in new_network_map.index:
+            if new_network_map[i] == j and new_network_map[j] == i:
+                indices_to_remove.add(j)
+
+    new_network_map = new_network_map.drop(labels=indices_to_remove) # remove duplicate lines
+
+    logger.info(f"{len(new_network_map)} new connections have been added")
+
+    busmap = (
+        n.buses.index.to_series()
+        .replace(new_network_map)
+        .astype(str)
+        .rename("busmap")
+    )
+
+    # return the original network if no changes are detected
+    if (busmap.index == busmap).all():
+        return n, n.buses.index.to_series()
+
+    bus_strategies, generator_strategies = get_aggregation_strategies(
+        aggregation_strategies
+    )
+
+    clustering = get_clustering_from_busmap(
+        n,
+        busmap,
+        bus_strategies=bus_strategies,
+        aggregate_generators_weighted=True,
+        aggregate_generators_carriers=None,
+        aggregate_one_ports=["Load", "StorageUnit"],
+        line_length_factor=1.0,
+        generator_strategies=generator_strategies,
+        scale_link_capital_costs=False,
+    )
+
+    return clustering.network, busmap
 
 
 def remove_stubs(
@@ -1009,6 +1126,22 @@ if __name__ == "__main__":
     busmaps = [trafo_map, simplify_links_map]
 
     cluster_config = snakemake.params.cluster_options["simplify_network"]
+    p_threshold_drop_isolated = max(
+        0.0, cluster_config.get("p_threshold_drop_isolated", 0.0)
+    )
+    p_threshold_merge_isolated = cluster_config.get("p_threshold_merge_isolated", False)
+
+    if cluster_config.get("merge_nearest_network", False):
+        n, merge_map = merge_nearest_network(
+            n,
+            cluster_config,
+            snakemake.input.offshore_shapes,
+            p_threshold_drop_isolated,
+            p_threshold_merge_isolated,
+            aggregation_strategies=aggregation_strategies,
+        )
+        busmaps.append(merge_map)
+    
     renewable_config = snakemake.params.renewable
     lines_length_factor = snakemake.params.config_lines["length_factor"]
     if cluster_config.get("remove_stubs", True):
@@ -1104,12 +1237,6 @@ if __name__ == "__main__":
 
     update_p_nom_max(n)
 
-    p_threshold_drop_isolated = max(
-        0.0, cluster_config.get("p_threshold_drop_isolated", 0.0)
-    )
-    p_threshold_merge_isolated = cluster_config.get("p_threshold_merge_isolated", False)
-    s_threshold_fetch_isolated = cluster_config.get("s_threshold_fetch_isolated", False)
-
     n = drop_isolated_nodes(n, threshold=p_threshold_drop_isolated)
     if p_threshold_merge_isolated:
         n, merged_nodes_map = merge_isolated_nodes(
@@ -1118,6 +1245,8 @@ if __name__ == "__main__":
             aggregation_strategies=aggregation_strategies,
         )
         busmaps.append(merged_nodes_map)
+
+    s_threshold_fetch_isolated = cluster_config.get("s_threshold_fetch_isolated", False)
 
     if s_threshold_fetch_isolated:
         n, fetched_nodes_map = merge_into_network(

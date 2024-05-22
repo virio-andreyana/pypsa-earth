@@ -61,6 +61,10 @@ cluster_options:
     algorithm: kmeans # choose from: [hac, kmeans]
     feature: solar+onwind-time # only for hac. choose from: [solar+onwind-time, solar+onwind-cap, solar-time, solar-cap, solar+offwind-cap] etc.
     exclude_carriers: []
+    merge_nearest_network: true
+    merge_nearest_network_tolerance_radius: 1
+    merge_nearest_network_across_borders: false
+    merge_nearest_network_across_water: false
     remove_stubs: true
     remove_stubs_across_borders: true
     p_threshold_drop_isolated: 20 # [MW] isolated buses are being discarded if bus mean power is below the specified threshold
