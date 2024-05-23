@@ -497,13 +497,13 @@ def simplify_links(
 def merge_nearest_network(
     n,
     cluster_config,
-    offshore_shapes,
+    fr_offshore_shapes,
     p_threshold_drop_isolated,
-    p_threshold_merge_isolated,
     aggregation_strategies=dict(),
 ):
 
-    merged_offshore_shapes = unary_union(gpd.read_file(offshore_shapes)["geometry"])
+    #merged_offshore_shapes = unary_union(gpd.read_file(offshore_shapes)["geometry"])
+    offshore_shapes = gpd.read_file(fr_offshore_shapes).set_index("name")
 
     tolerance_radius = cluster_config.get("merge_nearest_network_tolerance_radius", 1)
     across_border = cluster_config.get("merge_nearest_network_across_border", False)
@@ -511,7 +511,7 @@ def merge_nearest_network(
 
     logger.info(f"connecting stubs and isolated nodes to the nearest bus under a {tolerance_radius} deg radius")
 
-    network_crs = snakemake.params.geo_crs
+    network_crs = snakemake.params.distance_crs
 
     n.determine_network_topology()
 
@@ -533,7 +533,7 @@ def merge_nearest_network(
     # isolated buses with load below than a specified threshold are neglected
     i_load_islands = n.loads_t.p_set.columns.intersection(i_islands)
     i_small_load = i_load_islands[
-        n.loads_t.p_set[i_load_islands].mean(axis=0) <= max(p_threshold_drop_isolated,p_threshold_merge_isolated)]
+        n.loads_t.p_set[i_load_islands].mean(axis=0) <= p_threshold_drop_isolated]
 
     # create a new network map of potential nodes
     n_buses_gdf = n_buses_gdf.query("carrier=='AC'")
@@ -555,8 +555,11 @@ def merge_nearest_network(
 
         if not across_water:
             for i in bus1.index:
+                if bus0.country.item() not in offshore_shapes.index:
+                    continue
+
                 line = LineString([[bus0.x.item(), bus0.y.item()],[bus1.x[i].item(), bus1.y[i].item()]])
-                if line.intersects(merged_offshore_shapes):
+                if line.intersects(offshore_shapes.loc[bus0.country.item(),"geometry"]):
                     bus1.drop(i) # the line are not allowed to go through the sea
         
         new_network = gpd.sjoin_nearest(bus0, bus1, max_distance=tolerance_radius) # analysis is limited by a radius
@@ -576,6 +579,7 @@ def merge_nearest_network(
                 indices_to_remove.add(j)
 
     new_network_map = new_network_map.drop(labels=indices_to_remove) # remove duplicate lines
+    #new_network_map = new_network_map.drop(labels={"3220","3320","3465","3178"}) # VERY Special Case
 
     logger.info(f"{len(new_network_map)} new connections have been added")
 
@@ -915,7 +919,7 @@ def merge_into_network(n, threshold, aggregation_strategies=dict()):
     generators_mean_origin = n.generators.p_nom.mean()
     load_mean_origin = n.loads_t.p_set.mean().mean()
 
-    network_crs = snakemake.params.geo_crs
+    network_crs = snakemake.params.distance_crs
 
     n.determine_network_topology()
 
@@ -1129,7 +1133,6 @@ if __name__ == "__main__":
     p_threshold_drop_isolated = max(
         0.0, cluster_config.get("p_threshold_drop_isolated", 0.0)
     )
-    p_threshold_merge_isolated = cluster_config.get("p_threshold_merge_isolated", False)
 
     if cluster_config.get("merge_nearest_network", False):
         n, merge_map = merge_nearest_network(
@@ -1137,7 +1140,6 @@ if __name__ == "__main__":
             cluster_config,
             snakemake.input.offshore_shapes,
             p_threshold_drop_isolated,
-            p_threshold_merge_isolated,
             aggregation_strategies=aggregation_strategies,
         )
         busmaps.append(merge_map)
@@ -1236,6 +1238,8 @@ if __name__ == "__main__":
     n.buses = n.buses.drop(buses_c, axis=1)
 
     update_p_nom_max(n)
+
+    p_threshold_merge_isolated = cluster_config.get("p_threshold_merge_isolated", False)
 
     n = drop_isolated_nodes(n, threshold=p_threshold_drop_isolated)
     if p_threshold_merge_isolated:

@@ -557,6 +557,7 @@ rule simplify_network:
     params:
         renewable=config["renewable"],
         geo_crs=config["crs"]["geo_crs"],
+        distance_crs=config["crs"]["distance_crs"],
         cluster_options=config["cluster_options"],
         countries=config["countries"],
         build_shape_options=config["build_shape_options"],
