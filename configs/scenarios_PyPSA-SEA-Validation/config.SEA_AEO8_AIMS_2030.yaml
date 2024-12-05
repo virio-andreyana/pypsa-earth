@@ -9,7 +9,7 @@ run:
                         # Note: value false requires build_cutout to be enabled
 
 scenario:
-  opts: [Co2L0.675522-3H]
+  opts: [Co2L0.675522-3H, 3H]
 
 load_options:
   ssp: ssp2-2.6   # shared socio-economic pathway (GDP and population growth) scenario to consider
