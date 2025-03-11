@@ -450,6 +450,7 @@ def download_and_unzip_direct(config, rootpath, hot_run=True, disable_progress=F
         url=url,
         file_path=file_path,
         resource=resource,
+        destination=destination,
         hot_run=hot_run,
         unzip=unzip,
         disable_progress=disable_progress,
@@ -796,17 +797,40 @@ def merge_hydrobasins_shape(config_hydrobasin, hydrobasins_level):
     basins_path = os.path.join(BASE_DIR, config_hydrobasin["destination"])
     output_fl = os.path.join(BASE_DIR, config_hydrobasin["output"][0])
 
-    files_to_merge = [
-        "hybas_{0:s}_lev{1:02d}_v1c.shp".format(suffix, hydrobasins_level)
-        for suffix in config_hydrobasin["urls"]["hydrobasins"]["suffixes"]
-    ]
-    gpdf_list = [None] * len(files_to_merge)
-    logger.info("Merging hydrobasins files into: " + output_fl)
-    for i, f_name in tqdm(enumerate(files_to_merge)):
-        gpdf_list[i] = gpd.read_file(os.path.join(basins_path, f_name))
-    fl_merged = gpd.GeoDataFrame(pd.concat(gpdf_list)).drop_duplicates(
-        subset="HYBAS_ID", ignore_index=True
-    )
+    if "hydrobasins" in output_fl:
+        files_to_merge = [
+            "hybas_{0:s}_lev{1:02d}_v1c.shp".format(suffix, hydrobasins_level)
+            for suffix in config_hydrobasin["urls"]["hydrobasins"]["suffixes"]
+        ]
+        gpdf_list = [None] * len(files_to_merge)
+        logger.info("Merging hydrobasins files into: " + output_fl)
+        for i, f_name in tqdm(enumerate(files_to_merge)):
+            gpdf_list[i] = gpd.read_file(os.path.join(basins_path, f_name))
+        fl_merged = gpd.GeoDataFrame(pd.concat(gpdf_list)).drop_duplicates(
+            subset="HYBAS_ID", ignore_index=True
+        )
+
+    elif "basin90m" in output_fl:
+        logger.info(
+            "When using basin90m database, the following reference should be cited: \
+                    He, C., Yang, C. J., Turowski, J. M., Ott, R. F., Braun, J., Tang, H., Ghantous, S., Yuan, X., Stucky de Quay, \
+                    G. (2024). A global dataset of the shape of drainage systems. Earth System Science Data, 16(2), 1151-1166."
+        )
+
+        files_to_merge = [
+            "2023-004_He-et-al_Basins/Basins/{0:s}/{0:s}_Basin_{1:d}.shp".format(
+                suffix, hydrobasins_level
+            )
+            for suffix in config_hydrobasin["suffixes"]
+        ]
+        gpdf_list = [None] * len(files_to_merge)
+        logger.info("Merging basin90m files into: " + output_fl)
+        for i, f_name in tqdm(enumerate(files_to_merge)):
+            gpdf_list[i] = gpd.read_file(os.path.join(basins_path, f_name))
+        fl_merged = gpd.GeoDataFrame(pd.concat(gpdf_list))  # .drop_duplicates(
+        # subset="HYBAS_ID", ignore_index=True
+        # )
+
     fl_merged.to_file(output_fl, driver="ESRI Shapefile")
 
 
@@ -828,11 +852,10 @@ def retrieve_databundle(
 
     logger.info("Bundles to be downloaded:\n\t" + "\n\t".join(bundles_to_download))
 
-    hydrobasin_bundles = [
-        b_name for b_name in bundles_to_download if "hydrobasins" in b_name
-    ]
-    if len(hydrobasin_bundles) > 0:
-        config_bundles[hydrobasin_bundles[0]]["level_code"] = hydrobasins_level
+    basin_bundles = [b_name for b_name in bundles_to_download if "basin" in b_name]
+    if len(basin_bundles) > 0:
+        for b_name in basin_bundles:
+            config_bundles[b_name]["level_code"] = hydrobasins_level
 
     # initialize downloaded and missing bundles
     downloaded_bundles = []
@@ -847,14 +870,14 @@ def retrieve_databundle(
         for host in host_list:
             logger.info(f"Downloading bundle {b_name} - Host {host}")
 
-            try:
-                download_and_unzip = globals()[f"download_and_unzip_{host}"]
-                if download_and_unzip(
-                    config_bundles[b_name], rootpath, disable_progress=disable_progress
-                ):
-                    downloaded_bundle = True
-            except Exception:
-                logger.warning(f"Error in downloading bundle {b_name} - host {host}")
+            # try:
+            download_and_unzip = globals()[f"download_and_unzip_{host}"]
+            if download_and_unzip(
+                config_bundles[b_name], rootpath, disable_progress=disable_progress
+            ):
+                downloaded_bundle = True
+            # except Exception:
+            #    logger.warning(f"Error in downloading bundle {b_name} - host {host}")
 
             if downloaded_bundle:
                 downloaded_bundles.append(b_name)
@@ -863,11 +886,10 @@ def retrieve_databundle(
         if not downloaded_bundle:
             logger.error(f"Bundle {b_name} cannot be downloaded")
 
-    if len(hydrobasin_bundles) > 0:
-        logger.info("Merging regional hydrobasins files into a global shapefile")
-        merge_hydrobasins_shape(
-            config_bundles[hydrobasin_bundles[0]], hydrobasins_level
-        )
+    if len(basin_bundles) > 0:
+        for b_name in basin_bundles:
+            logger.info(f"Merging regional {b_name} files into a global shapefile")
+            merge_hydrobasins_shape(config_bundles[b_name], hydrobasins_level)
 
     # log the downloaded and missing bundles
     logger.info(

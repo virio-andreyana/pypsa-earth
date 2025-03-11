@@ -74,6 +74,20 @@ databundles:
     - data/gebco/GEBCO_2021_TID.nc
     - data/copernicus/PROBAV_LC100_global_v3.0.1_2019-nrt_Discrete-Classification-map_EPSG-4326.tif
 
+  # load tutorial basin90m for Africa only
+  bundle_tutorial_basin90m:
+    countries: [Africa]
+    tutorial: true
+    category: basin90m
+    destination: "data/basin90m"
+    urls:
+      gdrive: https://drive.google.com/file/d/1aQpOwkVnbz-FDwnBHL_Xf2Y8VAEIBAPT/view # TODO: This is a personal drive. Move it to a more official location.
+      direct: https://datapub.gfz-potsdam.de/download/10.5880.GFZ.4.6.2023.004-VEWUOn/2023-004_He-et-al_Basins.rar # Unable to unpack due to WinRAR.
+    suffixes: ["Africa"]
+    unzip: true
+    output:
+    - data/basin90m/basin_world.shp
+
   # load tutorial hydrobasins bundle for Africa only
   bundle_tutorial_hydrobasins:
     countries: [Africa]
@@ -156,6 +170,20 @@ databundles:
     - data/ssp2-2.6/2030/era5_2013/SouthAmerica.nc
     - data/ssp2-2.6/2030/era5_2013/Oceania.nc
     - data/landcover/world_protected_area/protected_areas_tutorial.shp
+
+  # global data for basin90m
+  bundle_basin90m:
+    countries: [Earth]
+    tutorial: false
+    category: basin90m
+    destination: "data/basin90m"
+    urls:
+      gdrive: https://drive.google.com/file/d/1aQpOwkVnbz-FDwnBHL_Xf2Y8VAEIBAPT/view # TODO: This is a personal drive. Move it to a more official location.
+      direct: https://datapub.gfz-potsdam.de/download/10.5880.GFZ.4.6.2023.004-VEWUOn/2023-004_He-et-al_Basins.rar # Unable to unpack due to WinRAR.
+    suffixes: ["Africa", "Asia", "Australasia", "Europe and Middle East", "North and Central America", "South America"]
+    unzip: true
+    output:
+    - data/basin90m/basin_world.shp
 
   # global data for hydrobasins
   bundle_hydrobasins:
